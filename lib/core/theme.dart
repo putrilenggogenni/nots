@@ -1,7 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// Warna diambil dari Figma NOTS (frame "Selamat Datang - NOTS").
+/// Warna diambil dari Figma NOTS.
 class NotsColors {
   NotsColors._();
 
@@ -15,10 +15,16 @@ class NotsColors {
   static const heroBackground = Color(0x66C1E8DC); // mint 40%
   static const checkBackground = Color(0x33C1E8DC); // mint 20%
   static const surfaceMuted = Color(0xFFF5F3EE);
+  static const buttonNeutral = Color(0xFFF0EEE9);
   static const divider = Color(0xFFE4E2DD);
   static const textPrimary = Color(0xFF1B1C19);
   static const textSecondary = Color(0xFF3F4946);
   static const textMuted = Color(0xFF6F7976);
+  static const tealText = Color(0xFF42655C);
+  static const textOnMint = Color(0xFF00201A);
+  static const dateText = Color(0xFF57625E);
+  static const inputIcon = Color(0xFFBEC9C5);
+  static const error = Color(0xFFBA1A1A);
 }
 
 ThemeData buildNotsTheme() {
