@@ -71,7 +71,7 @@ assets/
 └── images/
 ```
 
-## Tim
+## Tekber Kelompok 1 - NOTS
 
 | Nama | NRP |
 |---|---|
