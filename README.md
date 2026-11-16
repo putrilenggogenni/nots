@@ -54,7 +54,21 @@ cd nots
 
 # Ambil dependensi
 flutter pub get
+
+# Buat konfigurasi lokal Supabase (cukup sekali per komputer)
+Copy-Item env.example.json env.json
+# Edit env.json dan isi URL serta publishable key dari project Supabase
 ```
+
+Di VS Code, pilih perangkat di status bar lalu tekan **F5** atau **Run > Start Debugging**. Konfigurasi project otomatis memuat `env.json`.
+
+Alternatif dari terminal:
+
+```powershell
+flutter run --dart-define-from-file=env.json
+```
+
+`env.json` tidak disimpan di Git. Jangan masukkan `service_role` key; aplikasi hanya boleh menggunakan publishable/anon key.
 
 ## Struktur proyek
 
