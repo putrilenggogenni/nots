@@ -8,6 +8,7 @@ import '../../core/widgets/nots_common.dart';
 import '../../core/widgets/nots_inputs.dart';
 import '../tasks/task_repository.dart';
 import 'capture_parser.dart';
+import 'voice_capture_card.dart';
 
 class CaptureScreen extends StatefulWidget {
   const CaptureScreen({super.key, this.initialText});
@@ -20,8 +21,14 @@ class CaptureScreen extends StatefulWidget {
 
 class _CaptureScreenState extends State<CaptureScreen> {
   final _textController = TextEditingController();
+  final _voiceController = TextEditingController();
   String _source = 'manual';
   ParsedCapture _parsed = const ParsedCapture();
+  int _selectedTab = 0;
+
+  // Kolom teks di tab yang sedang aktif (Teks atau Suara).
+  TextEditingController get _active =>
+      _selectedTab == 2 ? _voiceController : _textController;
 
   @override
   void initState() {
@@ -32,6 +39,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
     _parsed = CaptureParser().parse(_textController.text);
     _textController.addListener(_onTextChanged);
+    _voiceController.addListener(_onVoiceChanged);
   }
 
   void _onTextChanged() {
@@ -41,13 +49,22 @@ class _CaptureScreenState extends State<CaptureScreen> {
     });
   }
 
+  void _onVoiceChanged() {
+    if (!mounted) return;
+    setState(() {
+      _parsed = CaptureParser()
+          .parse(normalizeSpokenNumbers(_voiceController.text));
+    });
+  }
+
   @override
   void dispose() {
     _textController.dispose();
+    _voiceController.dispose();
     super.dispose();
   }
 
-  bool get _hasText => _textController.text.trim().isNotEmpty;
+  bool get _hasText => _active.text.trim().isNotEmpty;
 
   Future<void> _pasteFromClipboard() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
@@ -68,22 +85,27 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   void _onTabTap(int index) {
-    if (index != 0) {
+    if (index == 1) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Segera hadir.')),
       );
       return;
     }
-    setState(() => _selectedTab = 0);
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _selectedTab = index;
+      _parsed = index == 2
+          ? CaptureParser()
+              .parse(normalizeSpokenNumbers(_voiceController.text))
+          : CaptureParser().parse(_textController.text);
+    });
   }
-
-  int _selectedTab = 0;
 
   void _analyze() {
     FocusScope.of(context).unfocus();
-    final text = _textController.text;
+    final text = _active.text;
     final parsed = _parsed;
-    final source = _source;
+    final source = _selectedTab == 2 ? 'voice' : _source;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -143,16 +165,25 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     onTap: _onTabTap,
                   ),
                   const SizedBox(height: 20),
-                  _InputCard(
-                    controller: _textController,
-                    charCount: _textController.text.length,
-                    parsed: _parsed,
-                    onPaste: _pasteFromClipboard,
-                  ),
-                  const SizedBox(height: 20),
-                  _TipsCard(),
-                  const SizedBox(height: 20),
-                  _AutoDetectCard(),
+                  if (_selectedTab == 2) ...[
+                    VoiceCaptureCard(
+                      controller: _voiceController,
+                      parsed: _parsed,
+                    ),
+                    const SizedBox(height: 20),
+                    _AutoDetectCard(),
+                  ] else ...[
+                    _InputCard(
+                      controller: _textController,
+                      charCount: _textController.text.length,
+                      parsed: _parsed,
+                      onPaste: _pasteFromClipboard,
+                    ),
+                    const SizedBox(height: 20),
+                    _TipsCard(),
+                    const SizedBox(height: 20),
+                    _AutoDetectCard(),
+                  ],
                 ],
               ),
             ),
@@ -175,7 +206,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Dianalisis secara lokal & aman di perangkatmu',
+                    _selectedTab == 2
+                        ? 'Suara diubah jadi teks oleh layanan pengenalan suara browser'
+                        : 'Dianalisis secara lokal & aman di perangkatmu',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 11,
@@ -352,135 +385,137 @@ class _InputCardState extends State<_InputCard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: const BoxDecoration(
-                        color: NotsColors.primaryDark,
-                        shape: BoxShape.circle,
-                      ),
+                    Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: NotsColors.primaryDark,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'TEKS SUMBER',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 11,
+                            height: 14 / 11,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.55,
+                            color: NotsColors.primaryDark,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'TEKS SUMBER',
-                      style: GoogleFonts.plusJakartaSans(
-                        fontSize: 11,
-                        height: 14 / 11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.55,
-                        color: NotsColors.primaryDark,
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: NotsColors.buttonNeutral,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.keyboard_alt_outlined,
+                              size: 11, color: NotsColors.textSecondary),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${widget.charCount} karakter',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 11,
+                              height: 14 / 11,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.22,
+                              color: NotsColors.textSecondary,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: NotsColors.buttonNeutral,
-                    borderRadius: BorderRadius.circular(999),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: widget.controller,
+                  minLines: 4,
+                  maxLines: null,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 16,
+                    height: 26 / 16,
+                    color: NotsColors.textPrimary,
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                  cursorColor: NotsColors.primary,
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    hintText: 'Tempel atau ketik pesan tugasmu di sini…',
+                    hintStyle: GoogleFonts.plusJakartaSans(
+                      fontSize: 16,
+                      height: 26 / 16,
+                      color: NotsColors.textMuted,
+                    ),
+                  ),
+                ),
+                if (widget.parsed.date != null ||
+                    widget.parsed.time != null) ...[
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
                     children: [
-                      const Icon(Icons.keyboard_alt_outlined,
-                          size: 11, color: NotsColors.textSecondary),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${widget.charCount} karakter',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 11,
-                          height: 14 / 11,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.22,
-                          color: NotsColors.textSecondary,
+                      if (widget.parsed.date != null)
+                        _DetectionChip(
+                          icon: Icons.event_outlined,
+                          label: formatDateChip(widget.parsed.date!),
                         ),
-                      ),
+                      if (widget.parsed.time != null)
+                        _DetectionChip(
+                          icon: Icons.schedule,
+                          label: formatTimeChip(widget.parsed.time!),
+                        ),
                     ],
+                  ),
+                ],
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: Material(
+                    color: NotsColors.mint70,
+                    borderRadius: BorderRadius.circular(999),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(999),
+                      onTap: widget.onPaste,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.content_paste,
+                              size: 14, color: NotsColors.primaryDark),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Tempel dari clipboard',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 13,
+                              height: 18 / 13,
+                              fontWeight: FontWeight.w600,
+                              color: NotsColors.primaryDark,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: widget.controller,
-              minLines: 4,
-              maxLines: null,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 16,
-                height: 26 / 16,
-                color: NotsColors.textPrimary,
-              ),
-              cursorColor: NotsColors.primary,
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                hintText: 'Tempel atau ketik pesan tugasmu di sini…',
-                hintStyle: GoogleFonts.plusJakartaSans(
-                  fontSize: 16,
-                  height: 26 / 16,
-                  color: NotsColors.textMuted,
-                ),
-              ),
-            ),
-            if (widget.parsed.date != null || widget.parsed.time != null) ...[
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  if (widget.parsed.date != null)
-                    _DetectionChip(
-                      icon: Icons.event_outlined,
-                      label: formatDateChip(widget.parsed.date!),
-                    ),
-                  if (widget.parsed.time != null)
-                    _DetectionChip(
-                      icon: Icons.schedule,
-                      label: formatTimeChip(widget.parsed.time!),
-                    ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 44,
-              child: Material(
-                color: NotsColors.mint70,
-                borderRadius: BorderRadius.circular(999),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(999),
-                  onTap: widget.onPaste,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.content_paste,
-                          size: 14, color: NotsColors.primaryDark),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Tempel dari clipboard',
-                        style: GoogleFonts.plusJakartaSans(
-                          fontSize: 13,
-                          height: 18 / 13,
-                          fontWeight: FontWeight.w600,
-                          color: NotsColors.primaryDark,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
-      ],
-    ));
+    );
   }
 }
 
@@ -741,86 +776,87 @@ class _ResultSheetState extends State<_ResultSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-            Text(
-              'Hasil sementara',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 18,
-                height: 24 / 18,
-                fontWeight: FontWeight.w700,
-                color: NotsColors.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 16),
-            NotsFormField(
-              label: 'Judul tugas',
-              controller: _titleController,
-              hint: 'Judul tugas',
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 12),
-            if (widget.parsed.date != null || widget.parsed.time != null)
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  if (widget.parsed.date != null)
-                    _DetectionChip(
-                      icon: Icons.event_outlined,
-                      label: formatDateChip(widget.parsed.date!),
-                    ),
-                  if (widget.parsed.time != null)
-                    _DetectionChip(
-                      icon: Icons.schedule,
-                      label: formatTimeChip(widget.parsed.time!),
-                    ),
-                ],
-              )
-            else
               Text(
-                'Tanggal belum terdeteksi',
+                'Hasil sementara',
                 style: GoogleFonts.plusJakartaSans(
-                  fontSize: 12,
-                  height: 16 / 12,
-                  color: NotsColors.textMuted,
+                  fontSize: 18,
+                  height: 24 / 18,
+                  fontWeight: FontWeight.w700,
+                  color: NotsColors.textPrimary,
                 ),
               ),
-            if (_error != null) ...[
+              const SizedBox(height: 16),
+              NotsFormField(
+                label: 'Judul tugas',
+                controller: _titleController,
+                hint: 'Judul tugas',
+                onChanged: (_) => setState(() {}),
+              ),
               const SizedBox(height: 12),
-              Text(
-                _error!,
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 12,
-                  height: 16 / 12,
-                  color: NotsColors.error,
+              if (widget.parsed.date != null || widget.parsed.time != null)
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    if (widget.parsed.date != null)
+                      _DetectionChip(
+                        icon: Icons.event_outlined,
+                        label: formatDateChip(widget.parsed.date!),
+                      ),
+                    if (widget.parsed.time != null)
+                      _DetectionChip(
+                        icon: Icons.schedule,
+                        label: formatTimeChip(widget.parsed.time!),
+                      ),
+                  ],
+                )
+              else
+                Text(
+                  'Tanggal belum terdeteksi',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    height: 16 / 12,
+                    color: NotsColors.textMuted,
+                  ),
+                ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 12,
+                    height: 16 / 12,
+                    color: NotsColors.error,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Opacity(
+                opacity: _canSave ? 1.0 : 0.5,
+                child: NotsPrimaryButton(
+                  label: 'Simpan tugas',
+                  onPressed: _canSave ? _save : null,
+                  loading: _saving,
+                  showArrow: false,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  'Layar konfirmasi menyusul.',
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 11,
+                    height: 14 / 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.22,
+                    color: NotsColors.textMuted,
+                  ),
                 ),
               ),
             ],
-            const SizedBox(height: 16),
-            Opacity(
-              opacity: _canSave ? 1.0 : 0.5,
-              child: NotsPrimaryButton(
-                label: 'Simpan tugas',
-                onPressed: _canSave ? _save : null,
-                loading: _saving,
-                showArrow: false,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                'Layar konfirmasi menyusul.',
-                style: GoogleFonts.plusJakartaSans(
-                  fontSize: 11,
-                  height: 14 / 11,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.22,
-                  color: NotsColors.textMuted,
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
-    ));
+    );
   }
 }

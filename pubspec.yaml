@@ -12,6 +12,7 @@ dependencies:
   flutter_svg: ^2.4.0
   google_fonts: ^9.0.0
   material_ui: ^1.4.0
+  speech_to_text: ^7.5.0
   supabase_flutter: ^2.18.3
 
 dev_dependencies:
