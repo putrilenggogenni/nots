@@ -10,6 +10,12 @@ import '../tasks/task_repository.dart';
 import 'capture_parser.dart';
 import 'voice_capture_card.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:image_picker/image_picker.dart';
+
+import 'ocr_service_stub.dart' if (dart.library.io) 'ocr_service.dart';
+import 'photo_capture_card.dart';
+
 class CaptureScreen extends StatefulWidget {
   const CaptureScreen({super.key, this.initialText});
 
@@ -22,11 +28,15 @@ class CaptureScreen extends StatefulWidget {
 class _CaptureScreenState extends State<CaptureScreen> {
   final _textController = TextEditingController();
   final _voiceController = TextEditingController();
+  int _selectedTab = 0;
   String _source = 'manual';
   ParsedCapture _parsed = const ParsedCapture();
-  int _selectedTab = 0;
+  final _picker = ImagePicker();
+  final _ocr = OcrService();
+  Uint8List? _imageBytes;
+  String? _imageName;
+  bool _scanning = false;
 
-  // Kolom teks di tab yang sedang aktif (Teks atau Suara).
   TextEditingController get _active =>
       _selectedTab == 2 ? _voiceController : _textController;
 
@@ -52,8 +62,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
   void _onVoiceChanged() {
     if (!mounted) return;
     setState(() {
-      _parsed = CaptureParser()
-          .parse(normalizeSpokenNumbers(_voiceController.text));
+      _parsed = CaptureParser().parse(
+        normalizeSpokenNumbers(_voiceController.text),
+      );
     });
   }
 
@@ -61,6 +72,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
   void dispose() {
     _textController.dispose();
     _voiceController.dispose();
+    _ocr.dispose();
     super.dispose();
   }
 
@@ -71,34 +83,73 @@ class _CaptureScreenState extends State<CaptureScreen> {
     final text = data?.text ?? '';
     if (!mounted) return;
     if (text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Clipboard kosong.')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Clipboard kosong.')));
       return;
     }
     _textController.text = text;
-    _textController.selection =
-        TextSelection.collapsed(offset: text.length);
+    _textController.selection = TextSelection.collapsed(offset: text.length);
     setState(() {
       _source = 'clipboard';
     });
   }
 
   void _onTabTap(int index) {
-    if (index == 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Segera hadir.')),
-      );
-      return;
-    }
     FocusScope.of(context).unfocus();
     setState(() {
       _selectedTab = index;
       _parsed = index == 2
-          ? CaptureParser()
-              .parse(normalizeSpokenNumbers(_voiceController.text))
+          ? CaptureParser().parse(normalizeSpokenNumbers(_voiceController.text))
           : CaptureParser().parse(_textController.text);
     });
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final file = await _picker.pickImage(source: source, imageQuality: 85);
+    if (file == null) return;
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+
+    setState(() {
+      _imageBytes = bytes;
+      _imageName = file.name;
+      _scanning = !kIsWeb;
+    });
+
+    if (kIsWeb) {
+      _snack(
+        'Foto berhasil dipilih. OCR tidak tersedia di browser; teks bisa diisi manual.',
+      );
+      _source = 'photo';
+      return;
+    }
+
+    try {
+      final text = (await _ocr.readText(file.path)).trim();
+      if (!mounted) return;
+      _textController.text = text;
+      _source = 'photo';
+      if (text.isEmpty) {
+        _snack('Teks tidak terbaca. Coba foto yang lebih jelas.');
+      }
+    } catch (_) {
+      _snack('Gagal membaca teks dari foto. Coba lagi.');
+    } finally {
+      if (mounted) setState(() => _scanning = false);
+    }
+  }
+
+  void _removeImage() {
+    setState(() {
+      _imageBytes = null;
+      _imageName = null;
+    });
+    _textController.clear();
   }
 
   void _analyze() {
@@ -118,11 +169,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
           padding: EdgeInsets.only(
             bottom: MediaQuery.of(ctx).viewInsets.bottom,
           ),
-          child: _ResultSheet(
-            text: text,
-            source: source,
-            parsed: parsed,
-          ),
+          child: _ResultSheet(text: text, source: source, parsed: parsed),
         );
       },
     );
@@ -160,16 +207,27 @@ class _CaptureScreenState extends State<CaptureScreen> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  _SegmentedControl(
-                    selected: _selectedTab,
-                    onTap: _onTabTap,
-                  ),
+                  _SegmentedControl(selected: _selectedTab, onTap: _onTabTap),
                   const SizedBox(height: 20),
                   if (_selectedTab == 2) ...[
                     VoiceCaptureCard(
                       controller: _voiceController,
                       parsed: _parsed,
                     ),
+                    const SizedBox(height: 20),
+                    _AutoDetectCard(),
+                  ] else if (_selectedTab == 1) ...[
+                    PhotoCaptureCard(
+                      controller: _textController,
+                      imageBytes: _imageBytes,
+                      imageName: _imageName,
+                      scanning: _scanning,
+                      onCamera: () => _pickImage(ImageSource.camera),
+                      onGallery: () => _pickImage(ImageSource.gallery),
+                      onRemove: _removeImage,
+                    ),
+                    const SizedBox(height: 20),
+                    _TipsCard(),
                     const SizedBox(height: 20),
                     _AutoDetectCard(),
                   ] else ...[
@@ -413,7 +471,9 @@ class _InputCardState extends State<_InputCard> {
                     ),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: NotsColors.buttonNeutral,
                         borderRadius: BorderRadius.circular(999),
@@ -421,8 +481,11 @@ class _InputCardState extends State<_InputCard> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.keyboard_alt_outlined,
-                              size: 11, color: NotsColors.textSecondary),
+                          const Icon(
+                            Icons.keyboard_alt_outlined,
+                            size: 11,
+                            color: NotsColors.textSecondary,
+                          ),
                           const SizedBox(width: 4),
                           Text(
                             '${widget.charCount} karakter',
@@ -493,8 +556,11 @@ class _InputCardState extends State<_InputCard> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.content_paste,
-                              size: 14, color: NotsColors.primaryDark),
+                          const Icon(
+                            Icons.content_paste,
+                            size: 14,
+                            color: NotsColors.primaryDark,
+                          ),
                           const SizedBox(width: 8),
                           Text(
                             'Tempel dari clipboard',
@@ -580,8 +646,11 @@ class _TipsCard extends StatelessWidget {
                 ),
               ],
             ),
-            child: const Icon(Icons.lightbulb_outline,
-                size: 16, color: NotsColors.primaryDark),
+            child: const Icon(
+              Icons.lightbulb_outline,
+              size: 16,
+              color: NotsColors.primaryDark,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -637,8 +706,11 @@ class _AutoDetectCard extends StatelessWidget {
                   color: Colors.white,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.auto_awesome,
-                    size: 13, color: NotsColors.primaryDark),
+                child: const Icon(
+                  Icons.auto_awesome,
+                  size: 13,
+                  color: NotsColors.primaryDark,
+                ),
               ),
               const SizedBox(width: 10),
               Text(
@@ -666,8 +738,11 @@ class _AutoDetectCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 2),
-              const Icon(Icons.check_circle_outline,
-                  size: 12, color: NotsColors.primaryDark),
+              const Icon(
+                Icons.check_circle_outline,
+                size: 12,
+                color: NotsColors.primaryDark,
+              ),
             ],
           ),
         ],
@@ -712,8 +787,7 @@ class _ResultSheetState extends State<_ResultSheet> {
     super.dispose();
   }
 
-  bool get _canSave =>
-      _titleController.text.trim().isNotEmpty && !_saving;
+  bool get _canSave => _titleController.text.trim().isNotEmpty && !_saving;
 
   Future<void> _save() async {
     setState(() {
@@ -747,9 +821,7 @@ class _ResultSheetState extends State<_ResultSheet> {
       final messenger = ScaffoldMessenger.of(context);
       navigator.pop(); // close sheet
       navigator.pop(); // back to previous (Home)
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Tugas tersimpan.')),
-      );
+      messenger.showSnackBar(const SnackBar(content: Text('Tugas tersimpan.')));
     } on TaskFailure catch (e) {
       if (!mounted) return;
       setState(() {
