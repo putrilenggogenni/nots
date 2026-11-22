@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   flutter_svg: ^2.4.0
   google_fonts: ^9.0.0
+  google_mlkit_text_recognition: ^1.0.3
+  image_picker: ^1.2.4
   material_ui: ^1.4.0
   speech_to_text: ^7.5.0
   supabase_flutter: ^2.18.3
