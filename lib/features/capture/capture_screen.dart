@@ -8,6 +8,7 @@ import '../../core/widgets/nots_common.dart';
 import '../../core/widgets/nots_inputs.dart';
 import '../tasks/task_repository.dart';
 import 'capture_parser.dart';
+import 'voice_capture_card.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image_picker/image_picker.dart';
@@ -26,6 +27,7 @@ class CaptureScreen extends StatefulWidget {
 
 class _CaptureScreenState extends State<CaptureScreen> {
   final _textController = TextEditingController();
+  final _voiceController = TextEditingController();
   int _selectedTab = 0;
   String _source = 'manual';
   ParsedCapture _parsed = const ParsedCapture();
@@ -34,6 +36,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
   Uint8List? _imageBytes;
   String? _imageName;
   bool _scanning = false;
+
+  TextEditingController get _active =>
+      _selectedTab == 2 ? _voiceController : _textController;
 
   @override
   void initState() {
@@ -44,6 +49,7 @@ class _CaptureScreenState extends State<CaptureScreen> {
     }
     _parsed = CaptureParser().parse(_textController.text);
     _textController.addListener(_onTextChanged);
+    _voiceController.addListener(_onVoiceChanged);
   }
 
   void _onTextChanged() {
@@ -53,14 +59,24 @@ class _CaptureScreenState extends State<CaptureScreen> {
     });
   }
 
+  void _onVoiceChanged() {
+    if (!mounted) return;
+    setState(() {
+      _parsed = CaptureParser().parse(
+        normalizeSpokenNumbers(_voiceController.text),
+      );
+    });
+  }
+
   @override
   void dispose() {
     _textController.dispose();
+    _voiceController.dispose();
     _ocr.dispose();
     super.dispose();
   }
 
-  bool get _hasText => _textController.text.trim().isNotEmpty;
+  bool get _hasText => _active.text.trim().isNotEmpty;
 
   Future<void> _pasteFromClipboard() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
@@ -79,11 +95,13 @@ class _CaptureScreenState extends State<CaptureScreen> {
   }
 
   void _onTabTap(int index) {
-    if (index == 2) {
-      _snack('Segera hadir.');
-      return;
-    }
-    setState(() => _selectedTab = index);
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _selectedTab = index;
+      _parsed = index == 2
+          ? CaptureParser().parse(normalizeSpokenNumbers(_voiceController.text))
+          : CaptureParser().parse(_textController.text);
+    });
   }
 
   void _snack(String msg) {
@@ -136,9 +154,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
 
   void _analyze() {
     FocusScope.of(context).unfocus();
-    final text = _textController.text;
+    final text = _active.text;
     final parsed = _parsed;
-    final source = _source;
+    final source = _selectedTab == 2 ? 'voice' : _source;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -191,14 +209,14 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   const SizedBox(height: 20),
                   _SegmentedControl(selected: _selectedTab, onTap: _onTabTap),
                   const SizedBox(height: 20),
-                  if (_selectedTab == 0)
-                    _InputCard(
-                      controller: _textController,
-                      charCount: _textController.text.length,
+                  if (_selectedTab == 2) ...[
+                    VoiceCaptureCard(
+                      controller: _voiceController,
                       parsed: _parsed,
-                      onPaste: _pasteFromClipboard,
-                    )
-                  else
+                    ),
+                    const SizedBox(height: 20),
+                    _AutoDetectCard(),
+                  ] else if (_selectedTab == 1) ...[
                     PhotoCaptureCard(
                       controller: _textController,
                       imageBytes: _imageBytes,
@@ -208,10 +226,22 @@ class _CaptureScreenState extends State<CaptureScreen> {
                       onGallery: () => _pickImage(ImageSource.gallery),
                       onRemove: _removeImage,
                     ),
-                  const SizedBox(height: 20),
-                  _TipsCard(),
-                  const SizedBox(height: 20),
-                  _AutoDetectCard(),
+                    const SizedBox(height: 20),
+                    _TipsCard(),
+                    const SizedBox(height: 20),
+                    _AutoDetectCard(),
+                  ] else ...[
+                    _InputCard(
+                      controller: _textController,
+                      charCount: _textController.text.length,
+                      parsed: _parsed,
+                      onPaste: _pasteFromClipboard,
+                    ),
+                    const SizedBox(height: 20),
+                    _TipsCard(),
+                    const SizedBox(height: 20),
+                    _AutoDetectCard(),
+                  ],
                 ],
               ),
             ),
@@ -234,7 +264,9 @@ class _CaptureScreenState extends State<CaptureScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Dianalisis secara lokal & aman di perangkatmu',
+                    _selectedTab == 2
+                        ? 'Suara diubah jadi teks oleh layanan pengenalan suara browser'
+                        : 'Dianalisis secara lokal & aman di perangkatmu',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.plusJakartaSans(
                       fontSize: 11,
