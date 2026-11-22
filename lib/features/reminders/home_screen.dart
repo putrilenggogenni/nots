@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/theme.dart';
 import '../../core/widgets/nots_buttons.dart';
 import '../auth/auth_service.dart';
+import '../capture/capture_screen.dart';
 
 /// Layar "Pengingat - Belum Ada Tugas" (halaman awal setelah login).
 class HomeScreen extends StatefulWidget {
@@ -34,17 +35,23 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${_days[now.weekday - 1]}, ${now.day} ${_months[now.month - 1]} ${now.year}';
   }
 
+  void _openCapture({String? initialText}) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => CaptureScreen(initialText: initialText)),
+    );
+  }
+
   Future<void> _paste() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text?.trim() ?? '';
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(
-        text.isEmpty
-            ? 'Clipboard kosong.'
-            : 'Teks tertangkap (${text.length} karakter). Layar konfirmasi menyusul.',
-      ),
-    ));
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Clipboard kosong.')),
+      );
+      return;
+    }
+    _openCapture(initialText: text);
   }
 
   void _openSettings() {
@@ -162,12 +169,15 @@ class _HomeScreenState extends State<HomeScreen> {
               label: 'Tangkap tugas pertamamu',
               leadingIcon: Icons.add_task,
               trailingIcon: Icons.arrow_forward,
-              onPressed: _paste,
+              onPressed: () => _openCapture(),
             ),
           ],
         ),
       ),
-      bottomNavigationBar: _BottomNav(onSettings: _openSettings),
+      bottomNavigationBar: _BottomNav(
+        onCreate: () => _openCapture(),
+        onSettings: _openSettings,
+      ),
     );
   }
 }
@@ -597,8 +607,9 @@ class _PasteHintCard extends StatelessWidget {
 }
 
 class _BottomNav extends StatelessWidget {
-  const _BottomNav({required this.onSettings});
+  const _BottomNav({required this.onCreate, required this.onSettings});
 
+  final VoidCallback onCreate;
   final VoidCallback onSettings;
 
   @override
@@ -625,7 +636,7 @@ class _BottomNav extends StatelessWidget {
               _NavItem(
                 icon: Icons.add_circle_outline,
                 label: 'Buat',
-                onTap: () {},
+                onTap: onCreate,
               ),
               _NavItem(icon: Icons.tune, label: 'Pengaturan', onTap: onSettings),
             ],
