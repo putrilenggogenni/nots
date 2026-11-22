@@ -25,6 +25,12 @@ class NotsColors {
   static const dateText = Color(0xFF57625E);
   static const inputIcon = Color(0xFFBEC9C5);
   static const error = Color(0xFFBA1A1A);
+  // New tokens for capture screen.
+  static const segmentTrack = Color(0xFFEAE8E3);
+  static const mint50 = Color(0x80C1E8DC);
+  static const mint60 = Color(0x99C1E8DC);
+  static const mint70 = Color(0xB3C1E8DC);
+  static const captionMuted = Color(0xB33F4946);
 }
 
 ThemeData buildNotsTheme() {
