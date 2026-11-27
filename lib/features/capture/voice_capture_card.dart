@@ -110,7 +110,7 @@ class _VoiceCaptureCardState extends State<VoiceCaptureCard> {
     await _speech.listen(
       onResult: _onResult,
       listenOptions: SpeechListenOptions(
-        localeId: _localeId,
+        localeId: _localeId.replaceAll('_', '-'),
         listenFor: const Duration(seconds: 90),
         pauseFor: const Duration(seconds: 8),
       ),
