@@ -10,10 +10,11 @@ import '../tasks/task_repository.dart';
 import 'capture_parser.dart';
 import 'voice_capture_card.dart';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image_picker/image_picker.dart';
 
-import 'ocr_service_stub.dart' if (dart.library.io) 'ocr_service.dart';
+import 'ocr_service_stub.dart'
+    if (dart.library.io) 'ocr_service.dart'
+    if (dart.library.js_interop) 'ocr_service_web.dart';
 import 'photo_capture_card.dart';
 
 class CaptureScreen extends StatefulWidget {
@@ -118,16 +119,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
     setState(() {
       _imageBytes = bytes;
       _imageName = file.name;
-      _scanning = !kIsWeb;
+      _scanning = true;
     });
-
-    if (kIsWeb) {
-      _snack(
-        'Foto berhasil dipilih. OCR tidak tersedia di browser; teks bisa diisi manual.',
-      );
-      _source = 'photo';
-      return;
-    }
 
     try {
       final text = (await _ocr.readText(file.path)).trim();
@@ -152,12 +145,12 @@ class _CaptureScreenState extends State<CaptureScreen> {
     _textController.clear();
   }
 
-  void _analyze() {
+  Future<void> _analyze() async {
     FocusScope.of(context).unfocus();
     final text = _active.text;
     final parsed = _parsed;
     final source = _selectedTab == 2 ? 'voice' : _source;
-    showModalBottomSheet<void>(
+    final savedId = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
@@ -173,6 +166,8 @@ class _CaptureScreenState extends State<CaptureScreen> {
         );
       },
     );
+    // Tersimpan: tutup layar Tangkap dan kirim id tugas ke Home.
+    if (savedId != null && mounted) Navigator.of(context).pop(savedId);
   }
 
   @override
@@ -810,18 +805,14 @@ class _ResultSheetState extends State<_ResultSheet> {
     }
 
     try {
-      await _repo.createTask(
+      final id = await _repo.createTask(
         title: _titleController.text.trim(),
         dueAt: dueAt,
         rawText: widget.text,
         source: widget.source,
       );
       if (!mounted) return;
-      final navigator = Navigator.of(context);
-      final messenger = ScaffoldMessenger.of(context);
-      navigator.pop(); // close sheet
-      navigator.pop(); // back to previous (Home)
-      messenger.showSnackBar(const SnackBar(content: Text('Tugas tersimpan.')));
+      Navigator.of(context).pop(id); // tutup sheet, bawa id
     } on TaskFailure catch (e) {
       if (!mounted) return;
       setState(() {
