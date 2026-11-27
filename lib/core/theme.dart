@@ -25,6 +25,9 @@ class NotsColors {
   static const dateText = Color(0xFF57625E);
   static const inputIcon = Color(0xFFBEC9C5);
   static const error = Color(0xFFBA1A1A);
+  // Tokens added for settings tab (reuse existing ones where possible).
+  static const mint100 = Color(0xFFC1E8DC);
+  static const errorContainerSoft = Color(0xFFFFDAD6);
   // New tokens for capture screen.
   static const segmentTrack = Color(0xFFEAE8E3);
   static const mint50 = Color(0x80C1E8DC);

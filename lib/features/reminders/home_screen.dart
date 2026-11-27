@@ -8,6 +8,8 @@ import '../../core/theme.dart';
 import '../../core/widgets/nots_buttons.dart';
 import '../auth/auth_service.dart';
 import '../capture/capture_screen.dart';
+import '../settings/profile_repository.dart';
+import '../settings/settings_screen.dart';
 import '../tasks/task_model.dart';
 import '../tasks/task_repository.dart';
 import 'task_detail_screen.dart';
@@ -33,6 +35,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   final _auth = AuthService();
   final _repo = TaskRepository();
+  final _profileRepo = ProfileRepository();
+  String _profileName = '';
+  int _tab = 0;
   final _searchController = TextEditingController();
   final _toggling = <String>{};
 
@@ -50,6 +55,15 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _reload();
+    _loadProfileName();
+  }
+
+  Future<void> _loadProfileName() async {
+    try {
+      final p = await _profileRepo.loadProfile();
+      if (!mounted) return;
+      setState(() => _profileName = p.name);
+    } catch (_) {}
   }
 
   @override
@@ -255,31 +269,20 @@ class _HomeScreenState extends State<HomeScreen> {
     await _openCapture(initialText: text);
   }
 
-  void _openSettings() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.white,
-      builder: (sheetContext) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.logout),
-              title: const Text('Keluar'),
-              onTap: () async {
-                Navigator.of(sheetContext).pop();
-                await _auth.signOut();
-              },
-            ),
-          ],
-        ),
-      ),
-    );
+  void _selectTab(int index) {
+    if (index == 1) {
+      _openCapture();
+      return;
+    }
+    setState(() => _tab = index);
+    if (index == 0) _loadProfileName();
   }
 
   @override
   Widget build(BuildContext context) {
-    final name = _auth.firstName ?? 'kamu';
+    final name = _profileName.isNotEmpty
+        ? _profileName.trim().split(RegExp(r'\\s+')).first
+        : (_auth.firstName ?? 'kamu');
     final searching = _query.trim().isNotEmpty;
 
     return Scaffold(
@@ -305,7 +308,7 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.only(right: 12),
             child: IconButton(
               tooltip: 'Pengaturan akun',
-              onPressed: _openSettings,
+              onPressed: () => _selectTab(2),
               icon: const CircleAvatar(
                 radius: 16,
                 backgroundColor: NotsColors.primaryDark,
@@ -319,30 +322,37 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              searching ? _compactGreeting(name) : _greeting(name),
-              SizedBox(height: searching ? 12 : 24),
-              _SearchBar(
-                key: const ValueKey('search'),
-                controller: _searchController,
-                onChanged: (value) => setState(() => _query = value),
-                onClear: _clearSearch,
+      body: _tab == 0
+          ? RefreshIndicator(
+              onRefresh: _reload,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    searching ? _compactGreeting(name) : _greeting(name),
+                    SizedBox(height: searching ? 12 : 24),
+                    _SearchBar(
+                      key: const ValueKey('search'),
+                      controller: _searchController,
+                      onChanged: (value) => setState(() => _query = value),
+                      onClear: _clearSearch,
+                    ),
+                    if (searching) ..._searchSection() else ..._homeSection(),
+                  ],
+                ),
               ),
-              if (searching) ..._searchSection() else ..._homeSection(),
-            ],
-          ),
-        ),
-      ),
+            )
+          : SettingsScreen(
+              onNameChanged: (newName) {
+                if (!mounted) return;
+                setState(() => _profileName = newName);
+              },
+            ),
       bottomNavigationBar: _BottomNav(
-        onCreate: () => _openCapture(),
-        onSettings: _openSettings,
+        selected: _tab == 0 ? 0 : 2,
+        onSelect: _selectTab,
       ),
     );
   }
@@ -1192,10 +1202,10 @@ class _PasteHintCard extends StatelessWidget {
 }
 
 class _BottomNav extends StatelessWidget {
-  const _BottomNav({required this.onCreate, required this.onSettings});
+  const _BottomNav({required this.selected, required this.onSelect});
 
-  final VoidCallback onCreate;
-  final VoidCallback onSettings;
+  final int selected;
+  final ValueChanged<int> onSelect;
 
   @override
   Widget build(BuildContext context) {
@@ -1220,18 +1230,19 @@ class _BottomNav extends StatelessWidget {
               _NavItem(
                 icon: Icons.checklist,
                 label: 'Pengingat',
-                selected: true,
-                onTap: () {},
+                selected: selected == 0,
+                onTap: () => onSelect(0),
               ),
               _NavItem(
                 icon: Icons.add_circle_outline,
                 label: 'Buat',
-                onTap: onCreate,
+                onTap: () => onSelect(1),
               ),
               _NavItem(
                 icon: Icons.tune,
                 label: 'Pengaturan',
-                onTap: onSettings,
+                selected: selected == 2,
+                onTap: () => onSelect(2),
               ),
             ],
           ),
