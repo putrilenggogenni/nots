@@ -1,15 +1,20 @@
 import 'dart:math' as math;
 
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../core/theme.dart';
 import '../../core/widgets/nots_buttons.dart';
 import '../auth/auth_service.dart';
 import '../capture/capture_screen.dart';
+import '../tasks/task_model.dart';
+import '../tasks/task_repository.dart';
+import 'task_detail_screen.dart';
+import 'task_logic.dart';
+import 'task_widgets.dart';
 
-/// Layar "Pengingat - Belum Ada Tugas" (halaman awal setelah login).
+/// Layar "Pengingat" (halaman awal setelah login).
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -18,7 +23,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  static const _filters = ['Hari ini', 'Besok', '7 hari', 'Semua'];
   static const _days = [
     'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu',
   ];
@@ -28,17 +32,216 @@ class _HomeScreenState extends State<HomeScreen> {
   ];
 
   final _auth = AuthService();
-  int _filter = 0;
+  final _repo = TaskRepository();
+  final _searchController = TextEditingController();
+  final _toggling = <String>{};
+
+  List<Task>? _tasks; // null = belum selesai dimuat
+  String? _loadError;
+  int _loadCount = 0;
+  String? _newTaskId; // tugas yang baru disimpan, ditaruh paling atas
+
+  int _filter = filterToday;
+  String _query = '';
+  int _category = 0;
+  bool _hideDone = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    final current = ++_loadCount;
+    try {
+      final tasks = await _repo.fetchAll();
+      if (!mounted || current != _loadCount) return;
+      setState(() {
+        _tasks = tasks;
+        _loadError = null;
+      });
+    } catch (e) {
+      if (!mounted || current != _loadCount) return;
+      if (_tasks == null) {
+        setState(() {
+          _loadError = '$e';
+        });
+      } else {
+        _snack('$e');
+      }
+    }
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _runAndReload(Future<void> Function() action) async {
+    try {
+      await action();
+      if (mounted) await _reload();
+    } catch (e) {
+      _snack('$e');
+    }
+  }
 
   String get _dateLabel {
     final now = DateTime.now();
     return '${_days[now.weekday - 1]}, ${now.day} ${_months[now.month - 1]} ${now.year}';
   }
 
-  void _openCapture({String? initialText}) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => CaptureScreen(initialText: initialText)),
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {
+      _query = '';
+      _category = 0;
+      _hideDone = false;
+    });
+  }
+
+  Future<void> _openCapture({String? initialText}) async {
+    final savedId = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (_) => CaptureScreen(initialText: initialText),
+      ),
     );
+    if (!mounted) return;
+    if (savedId != null) {
+      _newTaskId = savedId;
+      _clearSearch();
+    }
+    await _reload();
+    if (!mounted || savedId == null) return;
+
+    // Kalau tugas baru tidak masuk filter aktif, pindah ke "Semua".
+    final now = DateTime.now();
+    final hidden = (_tasks ?? <Task>[]).any(
+      (t) => t.id == savedId && !matchesDateFilter(t, _filter, now),
+    );
+    if (hidden) setState(() => _filter = filterAll);
+
+    _showToast(
+      'Pengingat disimpan',
+      () => _runAndReload(() => _repo.deleteTask(savedId)),
+    );
+  }
+
+  /// Notifikasi di atas navigasi bawah, dengan tombol "Urungkan".
+  void _showToast(String message, VoidCallback onUndo) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: NotsColors.primary,
+        shape: const StadiumBorder(),
+        margin: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+        duration: const Duration(seconds: 5),
+        content: Row(
+          children: [
+            const CircleAvatar(
+              radius: 14,
+              backgroundColor: NotsColors.mintBright,
+              child: Icon(Icons.check, size: 16, color: NotsColors.primaryDark),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                messenger.hideCurrentSnackBar();
+                onUndo();
+              },
+              child: Text(
+                'Urungkan',
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: NotsColors.mintBright,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Tutup notifikasi',
+              onPressed: () => messenger.hideCurrentSnackBar(),
+              icon: const Icon(
+                Icons.close,
+                size: 18,
+                color: NotsColors.mintBright,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleDone(Task task) async {
+    if (!_toggling.add(task.id)) return; // cegah ketuk dobel
+    final done = !task.isDone;
+    try {
+      await _repo.setDone(task.id, done);
+      if (!mounted) return;
+      await _reload();
+      if (!mounted || !done) return;
+      _showToast(
+        'Tugas selesai',
+        () => _runAndReload(() => _repo.setDone(task.id, false)),
+      );
+    } catch (e) {
+      _snack('$e');
+    } finally {
+      _toggling.remove(task.id);
+    }
+  }
+
+  Future<void> _openDetail(Task task) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => TaskDetailScreen(task: task)),
+    );
+    if (changed == true && mounted) await _reload();
+  }
+
+  Future<void> _confirmDelete(Task task) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Hapus pengingat?'),
+        content: Text(
+          '"${task.title}" akan dihapus dan tidak bisa dikembalikan.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Batal'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Hapus', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _runAndReload(() => _repo.deleteTask(task.id));
   }
 
   Future<void> _paste() async {
@@ -46,12 +249,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final text = data?.text?.trim() ?? '';
     if (!mounted) return;
     if (text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Clipboard kosong.')),
-      );
+      _snack('Clipboard kosong.');
       return;
     }
-    _openCapture(initialText: text);
+    await _openCapture(initialText: text);
   }
 
   void _openSettings() {
@@ -79,6 +280,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final name = _auth.firstName ?? 'kamu';
+    final searching = _query.trim().isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
@@ -98,80 +300,44 @@ class _HomeScreenState extends State<HomeScreen> {
             color: NotsColors.primaryDark,
           ),
         ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: IconButton(
+              tooltip: 'Pengaturan akun',
+              onPressed: _openSettings,
+              icon: const CircleAvatar(
+                radius: 16,
+                backgroundColor: NotsColors.primaryDark,
+                child: Icon(
+                  Icons.person_outline,
+                  size: 18,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              _dateLabel,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 12,
-                height: 16 / 12,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.3,
-                color: NotsColors.dateText,
+      body: RefreshIndicator(
+        onRefresh: _reload,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              searching ? _compactGreeting(name) : _greeting(name),
+              SizedBox(height: searching ? 12 : 24),
+              _SearchBar(
+                key: const ValueKey('search'),
+                controller: _searchController,
+                onChanged: (value) => setState(() => _query = value),
+                onClear: _clearSearch,
               ),
-            ),
-            const SizedBox(height: 2),
-            Text.rich(
-              TextSpan(
-                children: [
-                  const TextSpan(text: 'Halo, '),
-                  TextSpan(
-                    text: '$name.',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 30,
-                height: 38 / 30,
-                letterSpacing: -0.75,
-                color: NotsColors.textPrimary,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Siap menata jadwal kuliah dan tugasmu hari ini?',
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 12,
-                height: 16 / 12,
-                color: NotsColors.textMuted,
-              ),
-            ),
-            const SizedBox(height: 24),
-            _SearchBar(),
-            const SizedBox(height: 8),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  for (var i = 0; i < _filters.length; i++) ...[
-                    if (i > 0) const SizedBox(width: 4),
-                    _FilterChip(
-                      label: _filters[i],
-                      selected: i == _filter,
-                      onTap: () => setState(() => _filter = i),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            const _EmptyStateCard(),
-            const SizedBox(height: 24),
-            _PasteHintCard(onPaste: _paste),
-            const SizedBox(height: 24),
-            NotsPrimaryButton(
-              label: 'Tangkap tugas pertamamu',
-              leadingIcon: Icons.add_task,
-              trailingIcon: Icons.arrow_forward,
-              onPressed: () => _openCapture(),
-            ),
-          ],
+              if (searching) ..._searchSection() else ..._homeSection(),
+            ],
+          ),
         ),
       ),
       bottomNavigationBar: _BottomNav(
@@ -180,9 +346,392 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  Widget _greeting(String name) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _dateLabel,
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 12,
+            height: 16 / 12,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.3,
+            color: NotsColors.dateText,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text.rich(
+          TextSpan(
+            children: [
+              const TextSpan(text: 'Halo, '),
+              TextSpan(
+                text: '$name.',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: NotsColors.primaryDark,
+                ),
+              ),
+            ],
+          ),
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 30,
+            height: 38 / 30,
+            letterSpacing: -0.75,
+            color: NotsColors.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Siap menata jadwal kuliah dan tugasmu hari ini?',
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 12,
+            height: 16 / 12,
+            color: NotsColors.textMuted,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _compactGreeting(String name) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Halo, $name.',
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 22,
+            height: 28 / 22,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.55,
+            color: NotsColors.textPrimary,
+          ),
+        ),
+        Text(
+          _dateLabel,
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 12,
+            height: 16 / 12,
+            fontWeight: FontWeight.w500,
+            color: NotsColors.textSecondary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Isi halaman saat tidak sedang mencari.
+  List<Widget> _homeSection() {
+    return [
+      const SizedBox(height: 8),
+      _chipRow([
+        for (var i = 0; i < dateFilterLabels.length; i++)
+          _FilterChip(
+            label: dateFilterLabels[i],
+            icon: i == filterToday ? Icons.calendar_today_outlined : null,
+            selected: i == _filter,
+            onTap: () => setState(() => _filter = i),
+          ),
+      ]),
+      const SizedBox(height: 24),
+      ..._taskList(),
+    ];
+  }
+
+  List<Widget> _taskList() {
+    final tasks = _tasks;
+    if (tasks == null) return [_loadingOrError()];
+
+    if (tasks.isEmpty) {
+      return [
+        const _EmptyStateCard(),
+        const SizedBox(height: 24),
+        _PasteHintCard(onPaste: _paste),
+        const SizedBox(height: 24),
+        NotsPrimaryButton(
+          label: 'Tangkap tugas pertamamu',
+          leadingIcon: Icons.add_task,
+          trailingIcon: Icons.arrow_forward,
+          onPressed: () => _openCapture(),
+        ),
+      ];
+    }
+
+    final now = DateTime.now();
+    final inFilter =
+        tasks.where((t) => matchesDateFilter(t, _filter, now)).toList();
+    final active = inFilter.where((t) => !t.isDone).toList();
+    final newIndex = active.indexWhere((t) => t.id == _newTaskId);
+    if (newIndex > 0) active.insert(0, active.removeAt(newIndex));
+    // Tugas selesai hanya ditampilkan di filter "Semua".
+    final visible = [
+      ...active,
+      if (_filter == filterAll) ...inFilter.where((t) => t.isDone),
+    ];
+
+    return [
+      ProgressCard(progress: todayProgress(tasks, now)),
+      const SizedBox(height: 24),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            'Daftar Pengingat',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 15,
+              height: 20 / 15,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.375,
+              color: NotsColors.textPrimary,
+            ),
+          ),
+          Text(
+            '${active.length} Aktif',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: NotsColors.tealText,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+      if (visible.isEmpty)
+        _message(
+          'Tidak ada tugas aktif di "${dateFilterLabels[_filter]}". '
+          'Cek filter lain.',
+        ),
+      for (final task in visible)
+        Padding(
+          key: ValueKey(task.id),
+          padding: const EdgeInsets.only(bottom: 16),
+          child: TaskCard(
+            task: task,
+            justSaved: task.id == _newTaskId,
+            onOpen: () => _openDetail(task),
+            onToggle: () => _toggleDone(task),
+            onDelete: () => _confirmDelete(task),
+          ),
+        ),
+    ];
+  }
+
+  /// Isi halaman saat kotak pencarian terisi.
+  List<Widget> _searchSection() {
+    final tasks = _tasks;
+    if (tasks == null) {
+      return [const SizedBox(height: 24), _loadingOrError()];
+    }
+
+    final terms = searchTerms(_query);
+    final found = tasks.where((t) => matchesSearch(t, terms)).toList();
+    final shown = found.where((t) => matchesCategory(t, _category)).toList();
+    final upcoming = shown.where((t) => !t.isDone).toList();
+    final done = shown.where((t) => t.isDone).toList();
+
+    Widget card(Task task) => Padding(
+          key: ValueKey(task.id),
+          padding: const EdgeInsets.only(bottom: 12),
+          child: SearchTaskCard(
+            task: task,
+            terms: terms,
+            onOpen: () => _openDetail(task),
+            onToggle: () => _toggleDone(task),
+            onDelete: () => _confirmDelete(task),
+          ),
+        );
+
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(6, 4, 0, 4),
+        child: Row(
+          children: [
+            const CircleAvatar(
+              radius: 3,
+              backgroundColor: NotsColors.primaryDark,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(text: 'Ditemukan '),
+                    TextSpan(
+                      text: '${found.length} pengingat',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: NotsColors.primaryDark,
+                      ),
+                    ),
+                  ],
+                ),
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 12,
+                  color: NotsColors.textSecondary,
+                ),
+              ),
+            ),
+            _textButton('Reset Filter', _clearSearch),
+          ],
+        ),
+      ),
+      _chipRow([
+        for (var i = 0; i < searchCategoryLabels.length; i++)
+          _FilterChip(
+            label: '${searchCategoryLabels[i]} '
+                '(${found.where((t) => matchesCategory(t, i)).length})',
+            selected: i == _category,
+            onTap: () => setState(() => _category = i),
+          ),
+      ]),
+      const SizedBox(height: 20),
+      if (shown.isEmpty)
+        _message('Tidak ada pengingat yang cocok dengan "${_query.trim()}".'),
+      if (upcoming.isNotEmpty) ...[
+        _groupHeader(
+          'Mendatang',
+          upcoming.length,
+          trailing: Text(
+            'Urut waktu',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: NotsColors.textSecondary,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        ...upcoming.map(card),
+        const SizedBox(height: 12),
+      ],
+      if (done.isNotEmpty) ...[
+        _groupHeader(
+          'Selesai',
+          done.length,
+          trailing: _textButton(
+            _hideDone ? 'Tampilkan' : 'Sembunyikan',
+            () => setState(() => _hideDone = !_hideDone),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (!_hideDone) ...done.map(card),
+      ],
+    ];
+  }
+
+  Widget _loadingOrError() {
+    final error = _loadError;
+    if (error == null) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 48),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return Column(
+      children: [
+        _message(error),
+        _textButton('Coba lagi', () {
+          setState(() {
+            _loadError = null;
+          });
+          _reload();
+        }),
+      ],
+    );
+  }
+
+  Widget _message(String text) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: GoogleFonts.plusJakartaSans(
+          fontSize: 13,
+          color: NotsColors.textMuted,
+        ),
+      ),
+    );
+  }
+
+  Widget _textButton(String label, VoidCallback onPressed) {
+    return TextButton(
+      onPressed: onPressed,
+      child: Text(
+        label,
+        style: GoogleFonts.plusJakartaSans(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: NotsColors.primaryDark,
+        ),
+      ),
+    );
+  }
+
+  Widget _chipRow(List<Widget> chips) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          for (var i = 0; i < chips.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            chips[i],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _groupHeader(String title, int count, {required Widget trailing}) {
+    return Row(
+      children: [
+        Text(
+          title,
+          style: GoogleFonts.plusJakartaSans(
+            fontSize: 18,
+            height: 24 / 18,
+            fontWeight: FontWeight.w600,
+            color: NotsColors.textPrimary,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: NotsColors.mint,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            '$count pengingat',
+            style: GoogleFonts.plusJakartaSans(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: NotsColors.mintText,
+            ),
+          ),
+        ),
+        const Spacer(),
+        trailing,
+      ],
+    );
+  }
 }
 
 class _SearchBar extends StatelessWidget {
+  const _SearchBar({
+    super.key,
+    required this.controller,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
   @override
   Widget build(BuildContext context) {
     final style = GoogleFonts.plusJakartaSans(
@@ -201,6 +750,9 @@ class _SearchBar extends StatelessWidget {
         ],
       ),
       child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        textInputAction: TextInputAction.search,
         style: style,
         cursorColor: NotsColors.primary,
         decoration: InputDecoration(
@@ -208,8 +760,26 @@ class _SearchBar extends StatelessWidget {
           fillColor: Colors.white,
           hintText: 'Cari tugas atau mata kuliah...',
           hintStyle: style.copyWith(color: NotsColors.textMuted),
-          prefixIcon:
-              const Icon(Icons.search, size: 18, color: NotsColors.textMuted),
+          prefixIcon: const Icon(
+            Icons.search,
+            size: 20,
+            color: NotsColors.primaryDark,
+          ),
+          suffixIcon: controller.text.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Hapus pencarian',
+                  onPressed: onClear,
+                  icon: const CircleAvatar(
+                    radius: 14,
+                    backgroundColor: NotsColors.buttonNeutral,
+                    child: Icon(
+                      Icons.close,
+                      size: 16,
+                      color: NotsColors.textSecondary,
+                    ),
+                  ),
+                ),
           contentPadding: const EdgeInsets.symmetric(vertical: 18),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
@@ -226,35 +796,31 @@ class _FilterChip extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.icon,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
+    final foreground = selected ? Colors.white : NotsColors.textSecondary;
     return Material(
-      color: selected ? NotsColors.mint : NotsColors.surfaceMuted,
+      color: selected ? NotsColors.primary : NotsColors.buttonNeutral,
       shape: const StadiumBorder(),
       child: InkWell(
         customBorder: const StadiumBorder(),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (selected) ...[
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: const BoxDecoration(
-                    color: NotsColors.primary,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 6),
+              if (icon != null) ...[
+                Icon(icon, size: 13, color: foreground),
+                const SizedBox(width: 4),
               ],
               Text(
                 label,
@@ -262,9 +828,7 @@ class _FilterChip extends StatelessWidget {
                   fontSize: 13,
                   height: 18 / 13,
                   fontWeight: FontWeight.w600,
-                  color: selected
-                      ? NotsColors.primary
-                      : NotsColors.textSecondary,
+                  color: foreground,
                 ),
               ),
             ],
@@ -284,7 +848,12 @@ class _EmptyStateCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        // Pendar mint tipis di pojok kartu, sesuai Figma.
+        gradient: const LinearGradient(
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+          colors: [Color(0xFFF0FCF9), Colors.white, Color(0xFFF2F9F6)],
+        ),
         borderRadius: BorderRadius.circular(24),
         boxShadow: const [
           BoxShadow(
@@ -333,8 +902,11 @@ class _EmptyStateCard extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.lightbulb_outline,
-                    size: 20, color: NotsColors.primaryDark),
+                const Icon(
+                  Icons.lightbulb_outline,
+                  size: 20,
+                  color: NotsColors.primaryDark,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -446,8 +1018,11 @@ class _EmptyIllustration extends StatelessWidget {
                         ],
                       ),
                       child: const Center(
-                        child: Icon(Icons.notifications,
-                            size: 24, color: Colors.white),
+                        child: Icon(
+                          Icons.notifications,
+                          size: 24,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                     Positioned(
@@ -460,7 +1035,9 @@ class _EmptyIllustration extends StatelessWidget {
                           color: NotsColors.mintBright,
                           shape: BoxShape.circle,
                           border: Border.all(
-                              color: NotsColors.primary, width: 2),
+                            color: NotsColors.primary,
+                            width: 2,
+                          ),
                         ),
                       ),
                     ),
@@ -501,8 +1078,11 @@ class _NoteRow extends StatelessWidget {
             ),
             child: Center(
               child: done
-                  ? const Icon(Icons.check,
-                      size: 9, color: NotsColors.primaryDark)
+                  ? const Icon(
+                      Icons.check,
+                      size: 9,
+                      color: NotsColors.primaryDark,
+                    )
                   : Container(
                       width: 6,
                       height: 6,
@@ -550,8 +1130,11 @@ class _PasteHintCard extends StatelessWidget {
               color: NotsColors.mint,
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.content_paste,
-                size: 16, color: NotsColors.primary),
+            child: const Icon(
+              Icons.content_paste,
+              size: 16,
+              color: NotsColors.primary,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -586,8 +1169,10 @@ class _PasteHintCard extends StatelessWidget {
               customBorder: const StadiumBorder(),
               onTap: onPaste,
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 6,
+                ),
                 child: Text(
                   'Tempel',
                   style: GoogleFonts.plusJakartaSans(
@@ -632,13 +1217,22 @@ class _BottomNav extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _NavItem(icon: Icons.checklist, label: 'Pengingat', onTap: () {}),
+              _NavItem(
+                icon: Icons.checklist,
+                label: 'Pengingat',
+                selected: true,
+                onTap: () {},
+              ),
               _NavItem(
                 icon: Icons.add_circle_outline,
                 label: 'Buat',
                 onTap: onCreate,
               ),
-              _NavItem(icon: Icons.tune, label: 'Pengaturan', onTap: onSettings),
+              _NavItem(
+                icon: Icons.tune,
+                label: 'Pengaturan',
+                onTap: onSettings,
+              ),
             ],
           ),
         ),
@@ -652,34 +1246,42 @@ class _NavItem extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.selected = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    final foreground =
+        selected ? NotsColors.mintText : NotsColors.textSecondary;
+    return Material(
+      color: selected ? NotsColors.mint : Colors.transparent,
       borderRadius: BorderRadius.circular(999),
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 18, color: NotsColors.textSecondary),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: GoogleFonts.plusJakartaSans(
-                fontSize: 13,
-                height: 18 / 13,
-                fontWeight: FontWeight.w600,
-                color: NotsColors.textSecondary,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: foreground),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: GoogleFonts.plusJakartaSans(
+                  fontSize: 13,
+                  height: 18 / 13,
+                  fontWeight: FontWeight.w600,
+                  color: foreground,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
