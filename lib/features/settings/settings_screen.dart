@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/theme.dart';
 import '../auth/auth_service.dart';
-import '../courses/courses_placeholder_screen.dart';
+import '../courses/courses_screen.dart';
 import 'edit_name_sheet.dart';
 import 'profile_repository.dart';
 
@@ -97,7 +97,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _openCourses() async {
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const CoursesPlaceholderScreen()),
+      MaterialPageRoute(builder: (_) => const CoursesScreen()),
     );
     if (mounted) await _reloadCounts();
   }
